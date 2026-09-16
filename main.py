@@ -1,8 +1,30 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from fastapi import HTTPException
+from sqlalchemy import create_engine, URL
+from sqlalchemy import text
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+url = URL.create(
+    drivername="postgresql+psycopg",
+    username="postgres",
+    password=os.getenv("DB_PASSWORD"),
+    host="localhost",
+    port=5432,
+    database="task_manager"
+)
+
+engine = create_engine(url)
 
 class Task(BaseModel):
     id: int
+    title: str
+    completed: bool
+
+class TaskCreate(BaseModel):
     title: str
     completed: bool
 
@@ -12,39 +34,70 @@ app = FastAPI()
 async def root():
     return {"message": "Hello World"}
 
-tasks = [
-    Task(id=1, title="Learn FastAPI", completed=False),
-    Task(id=2, title="Do LeetCode", completed=True)
-]
-
-@app.get("/tasks")
+# Read all tasks
+@app.get("/tasks") 
 async def get_tasks():
+    with engine.connect() as connection:
+        result = connection.execute(text("SELECT * FROM tasks"))
+        tasks = []
+        for row in result: 
+            tasks.append(Task(id=row[0], title=row[1], completed=row[2]))
     return tasks
 
-@app.get("/tasks/{task_id}")
+# Read a single task
+@app.get("/tasks/{task_id}") 
 async def get_task(task_id: int):
-    for task in tasks:
-        if task.id == task_id:
-            return task
-    return {"error": "Task not found"}
+    with engine.connect() as connection:
+        result = connection.execute(text("SELECT * FROM tasks WHERE id = :id"), {"id": task_id})
+        for row in result:
+            return Task(id=row[0], title=row[1], completed=row[2])
+    raise HTTPException(status_code=404, detail="Task not found")
+    
 
-@app.post("/tasks")
-async def add_tasks(task: Task):
-    tasks.append(task)
-    return task
+# Create a new task
+@app.post("/tasks", status_code=201) 
+async def add_tasks(task: TaskCreate):
+    with engine.begin() as connection:
+        connection.execute(text("""
+                                INSERT INTO tasks (title, completed) 
+                                VALUES (:title, :completed)
+                                """), 
+                                {
+                                    "title": task.title, 
+                                    "completed": task.completed
+                                    }
+                         )
+        return {"message": "Task created successfully"}
 
-@app.put("/tasks/{task_id}")
-async def update_task(task_id: int, updated_task: Task):
-    for i, task in enumerate(tasks):
-        if task.id == task_id:
-            tasks[i] = updated_task
-            return updated_task
-    return {"error": "Task not found"}
+# Update a task
+@app.put("/tasks/{task_id}") 
+async def update_task(task_id: int, updated_task: TaskCreate):
+    with engine.begin() as connection:
+        result = connection.execute(text("""
+                                        UPDATE tasks 
+                                        SET title = :title, completed = :completed 
+                                        WHERE id = :id
+                                        """), 
+                                        {
+                                            "title": updated_task.title, 
+                                            "completed": updated_task.completed, 
+                                            "id": task_id
+                                        }
+                         )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Task not found")
+    return {"message": "Task updated successfully"}
 
+# Delete a task
 @app.delete("/tasks/{task_id}")
 async def delete_task(task_id: int):
-    for i, task in enumerate(tasks):
-        if task.id == task_id:
-            deleted_task = tasks.pop(i)
-            return deleted_task
-    return {"error": "Task not found"}
+    with engine.begin() as connection:
+        result = connection.execute(text("""
+                                        DELETE FROM tasks 
+                                        WHERE id = :id
+                                        """), 
+                                        {"id": task_id}
+                         )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Task not found")
+    return {"message": "Task deleted successfully"}
