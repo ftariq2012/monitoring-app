@@ -1,24 +1,12 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi import HTTPException
-from sqlalchemy import create_engine, URL
-from sqlalchemy import text
-from dotenv import load_dotenv
-import os
+from sqlalchemy import Boolean, String, text, select
+from database import engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 
-load_dotenv()
 
-url = URL.create(
-    drivername="postgresql+psycopg",
-    username="postgres",
-    password=os.getenv("DB_PASSWORD"),
-    host="localhost",
-    port=5432,
-    database="task_manager"
-)
-
-engine = create_engine(url)
-
+# Pydantic models for request and response validation
 class Task(BaseModel):
     id: int
     title: str
@@ -27,6 +15,20 @@ class Task(BaseModel):
 class TaskCreate(BaseModel):
     title: str
     completed: bool
+
+
+# ORM Base
+class Base(DeclarativeBase):
+    pass
+
+# ORM model mapping for the tasks table
+class TaskDB(Base):
+    __tablename__ = "tasks"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(50))
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
 
 app = FastAPI()
 
@@ -37,37 +39,38 @@ async def root():
 # Read all tasks
 @app.get("/tasks") 
 async def get_tasks():
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT * FROM tasks"))
-        tasks = []
-        for row in result: 
-            tasks.append(Task(id=row[0], title=row[1], completed=row[2]))
-    return tasks
+    with Session(engine) as session:
+        statement = select(TaskDB)
+        result = session.scalars(statement)
+        tasks = result.all()
+    return [Task(id=task.id, title=task.title, completed=task.completed) for task in tasks]
 
 # Read a single task
 @app.get("/tasks/{task_id}") 
 async def get_task(task_id: int):
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT * FROM tasks WHERE id = :id"), {"id": task_id})
-        for row in result:
-            return Task(id=row[0], title=row[1], completed=row[2])
-    raise HTTPException(status_code=404, detail="Task not found")
+    with Session(engine) as session:
+        result = session.get(TaskDB, task_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return Task(id=result.id, title=result.title, completed=result.completed)
     
 
 # Create a new task
 @app.post("/tasks", status_code=201) 
 async def add_tasks(task: TaskCreate):
     with engine.begin() as connection:
-        connection.execute(text("""
+        result = connection.execute(text("""
                                 INSERT INTO tasks (title, completed) 
                                 VALUES (:title, :completed)
+                                RETURNING id, title, completed
                                 """), 
                                 {
                                     "title": task.title, 
                                     "completed": task.completed
                                     }
                          )
-        return {"message": "Task created successfully"}
+        row = result.fetchone()
+        return Task(id=row[0], title=row[1], completed=row[2])
 
 # Update a task
 @app.put("/tasks/{task_id}") 
