@@ -20,9 +20,13 @@ async def get_tasks(current_user_id: int = Depends(get_current_user)):
 
 # Read a single task
 @router.get("/{task_id}") 
-async def get_task(task_id: int):
+async def get_task(task_id: int, current_user_id: int = Depends(get_current_user)):
     with Session(engine) as session:
-        result = session.get(TaskDB, task_id)
+        statement = select(TaskDB).where(
+            TaskDB.id == task_id,
+            TaskDB.user_id == current_user_id
+        )
+        result = session.scalar(statement)
         if result is None:
             raise HTTPException(status_code=404, detail="Task not found")
         return Task(id=result.id, title=result.title, completed=result.completed)
@@ -30,16 +34,17 @@ async def get_task(task_id: int):
 
 # Create a new task
 @router.post("/", status_code=201) 
-async def add_tasks(task: TaskCreate):
+async def add_tasks(task: TaskCreate, current_user_id: int = Depends(get_current_user)):
     with engine.begin() as connection:
         result = connection.execute(text("""
-                                INSERT INTO tasks (title, completed) 
-                                VALUES (:title, :completed)
-                                RETURNING id, title, completed
+                                INSERT INTO tasks (title, completed, user_id) 
+                                VALUES (:title, :completed, :user_id)
+                                RETURNING id, title, completed, user_id
                                 """), 
                                 {
                                     "title": task.title, 
-                                    "completed": task.completed
+                                    "completed": task.completed,
+                                    "user_id": current_user_id
                                     }
                          )
         row = result.fetchone()
@@ -53,17 +58,18 @@ async def add_tasks(task: TaskCreate):
 
 # Update a task
 @router.put("/{task_id}") 
-async def update_task(task_id: int, updated_task: TaskCreate):
+async def update_task(task_id: int, updated_task: TaskCreate, current_user_id: int = Depends(get_current_user)):
     with engine.begin() as connection:
         result = connection.execute(text("""
                                         UPDATE tasks 
                                         SET title = :title, completed = :completed 
-                                        WHERE id = :id
+                                        WHERE id = :id AND user_id = :user_id
                                         """), 
                                         {
                                             "title": updated_task.title, 
                                             "completed": updated_task.completed, 
-                                            "id": task_id
+                                            "id": task_id,
+                                            "user_id": current_user_id
                                         }
                          )
         if result.rowcount == 0:
@@ -72,13 +78,16 @@ async def update_task(task_id: int, updated_task: TaskCreate):
 
 # Delete a task
 @router.delete("/{task_id}")
-async def delete_task(task_id: int):
+async def delete_task(task_id: int, current_user_id: int = Depends(get_current_user)):
     with engine.begin() as connection:
         result = connection.execute(text("""
                                         DELETE FROM tasks 
                                         WHERE id = :id
+                                        AND user_id = :user_id
                                         """), 
-                                        {"id": task_id}
+                                        {"id": task_id,
+                                         "user_id": current_user_id
+                                         }
                          )
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Task not found")
