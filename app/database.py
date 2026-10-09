@@ -12,7 +12,7 @@ url = URL.create(
     password=os.getenv("DB_PASSWORD"),
     host=host,
     port=5432,
-    database="task_manager"
+    database=os.getenv("DB_NAME", "task_manager")
 )
 
 engine = create_engine(url)
